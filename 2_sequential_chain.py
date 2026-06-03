@@ -33,6 +33,7 @@ chain = prompt1 | model | parser | prompt2 | model | parser
 # If we want to pass some ourown metadate for tracing or other things we can do that by setting up a config and then pass that config to the chain.invoke
 config = {
     'run_name':"sequentail run", #to chgange the run or trace name
+    'tags':['llm_app','report_generator','summarization'],
     'metadata': {
         'subject':"Unemployment in India", #to set some tags
     }

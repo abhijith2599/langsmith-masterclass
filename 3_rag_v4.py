@@ -1,5 +1,3 @@
-# pip install -U langchain langchain-openai langchain-community faiss-cpu pypdf python-dotenv langsmith
-
 import os
 import json
 import hashlib
@@ -10,8 +8,8 @@ from langsmith import traceable
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableParallel, RunnablePassthrough, RunnableLambda
@@ -19,25 +17,31 @@ from langchain_core.output_parsers import StrOutputParser
 
 load_dotenv()
 
+os.environ["LANGCHAIN_PROJECT"]="RAG Chatbot"
+
+API_KEY = os.getenv("GOOGLE_API_KEY")
+if not API_KEY:
+    raise ValueError("GOOGLE_API_KEY is not set")
+
 PDF_PATH = "islr.pdf"  # change to your file
 INDEX_ROOT = Path(".indices")
 INDEX_ROOT.mkdir(exist_ok=True)
 
 # ----------------- helpers (traced) -----------------
-@traceable(name="load_pdf")
+@traceable(name="load_pdf", tags=["load", "pdf"], metadata={"component": "loader"})
 def load_pdf(path: str):
     return PyPDFLoader(path).load()  # list[Document]
 
-@traceable(name="split_documents")
+@traceable(name="split_documents", tags=["chunking", "text_splitter"], metadata={"component": "splitter"})
 def split_documents(docs, chunk_size=1000, chunk_overlap=150):
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size, chunk_overlap=chunk_overlap
     )
     return splitter.split_documents(docs)
 
-@traceable(name="build_vectorstore")
+@traceable(name="build_vectorstore", tags=["indexing", "vectorstore", "faiss"], metadata={"component": "indexer"})
 def build_vectorstore(splits, embed_model_name: str):
-    emb = OpenAIEmbeddings(model=embed_model_name)
+    emb = HuggingFaceEmbeddings(model_name=embed_model_name, model_kwargs={'device': 'cpu'})
     return FAISS.from_documents(splits, emb)
 
 # ----------------- cache key / fingerprint -----------------
@@ -60,16 +64,16 @@ def _index_key(pdf_path: str, chunk_size: int, chunk_overlap: int, embed_model_n
     return hashlib.sha256(json.dumps(meta, sort_keys=True).encode("utf-8")).hexdigest()
 
 # ----------------- explicitly traced load/build runs -----------------
-@traceable(name="load_index", tags=["index"])
+@traceable(name="load_index", tags=["index", "load"], metadata={"component": "cache_loader"})
 def load_index_run(index_dir: Path, embed_model_name: str):
-    emb = OpenAIEmbeddings(model=embed_model_name)
+    emb = HuggingFaceEmbeddings(model_name=embed_model_name, model_kwargs={'device': 'cpu'})
     return FAISS.load_local(
         str(index_dir),
         emb,
         allow_dangerous_deserialization=True
     )
 
-@traceable(name="build_index", tags=["index"])
+@traceable(name="build_index", tags=["index", "build"], metadata={"component": "cache_builder"})
 def build_index_run(pdf_path: str, index_dir: Path, chunk_size: int, chunk_overlap: int, embed_model_name: str):
     docs = load_pdf(pdf_path)  # child
     splits = split_documents(docs, chunk_size=chunk_size, chunk_overlap=chunk_overlap)  # child
@@ -89,7 +93,7 @@ def load_or_build_index(
     pdf_path: str,
     chunk_size: int = 1000,
     chunk_overlap: int = 150,
-    embed_model_name: str = "text-embedding-3-small",
+    embed_model_name: str = "BAAI/bge-small-en-v1.5",
     force_rebuild: bool = False,
 ):
     key = _index_key(pdf_path, chunk_size, chunk_overlap, embed_model_name)
@@ -101,10 +105,6 @@ def load_or_build_index(
         return build_index_run(pdf_path, index_dir, chunk_size, chunk_overlap, embed_model_name)
 
 # ----------------- model, prompt, and pipeline -----------------
-API_KEY = os.getenv("GOOGLE_API_KEY")
-if not API_KEY:
-    raise ValueError("GOOGLE_API_KEY is not set")
-
 llm = ChatGoogleGenerativeAI(api_key=API_KEY, model="gemini-2.5-flash", temperature=0.7)
 
 prompt = ChatPromptTemplate.from_messages([
@@ -115,8 +115,8 @@ prompt = ChatPromptTemplate.from_messages([
 def format_docs(docs):
     return "\n\n".join(d.page_content for d in docs)
 
-@traceable(name="setup_pipeline", tags=["setup"])
-def setup_pipeline(pdf_path: str, chunk_size=1000, chunk_overlap=150, embed_model_name="text-embedding-3-small", force_rebuild=False):
+@traceable(name="setup_pipeline", tags=["setup", "pipeline"], metadata={"component": "orchestrator"})
+def setup_pipeline(pdf_path: str, chunk_size=1000, chunk_overlap=150, embed_model_name="BAAI/bge-small-en-v1.5", force_rebuild=False):
     return load_or_build_index(
         pdf_path=pdf_path,
         chunk_size=chunk_size,
@@ -125,13 +125,13 @@ def setup_pipeline(pdf_path: str, chunk_size=1000, chunk_overlap=150, embed_mode
         force_rebuild=force_rebuild,
     )
 
-@traceable(name="pdf_rag_full_run")
+@traceable(name="pdf_rag_full_run", tags=["full_run", "rag"], metadata={"component": "entrypoint"})
 def setup_pipeline_and_query(
     pdf_path: str,
     question: str,
     chunk_size: int = 1000,
     chunk_overlap: int = 150,
-    embed_model_name: str = "text-embedding-3-small",
+    embed_model_name: str = "BAAI/bge-small-en-v1.5",
     force_rebuild: bool = False,
 ):
     vectorstore = setup_pipeline(pdf_path, chunk_size, chunk_overlap, embed_model_name, force_rebuild)

@@ -1,5 +1,3 @@
-# pip install -U langchain langchain-openai langchain-community faiss-cpu pypdf python-dotenv langsmith
-
 import os
 from dotenv import load_dotenv
 
@@ -7,8 +5,8 @@ from langsmith import traceable
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableParallel, RunnablePassthrough, RunnableLambda
@@ -16,28 +14,34 @@ from langchain_core.output_parsers import StrOutputParser
 
 load_dotenv()
 
+os.environ["LANGCHAIN_PROJECT"]="RAG Chatbot"
+
+API_KEY = os.getenv("GOOGLE_API_KEY")
+if not API_KEY:
+    raise ValueError("GOOGLE_API_KEY is not set")
+
 PDF_PATH = "islr.pdf"  # <- change to your file
 
 # ----------------- helpers (not traced individually) -----------------
-@traceable(name="load_pdf")
+@traceable(name="load_pdf", tags=["load", "pdf"], metadata={"component": "loader"})
 def load_pdf(path: str):
     loader = PyPDFLoader(path)
     return loader.load()  # list[Document]
 
-@traceable(name="split_documents")
+@traceable(name="split_documents", tags=["chunking", "text_splitter"], metadata={"component": "splitter"})
 def split_documents(docs, chunk_size=1000, chunk_overlap=150):
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size, chunk_overlap=chunk_overlap
     )
     return splitter.split_documents(docs)
 
-@traceable(name="build_vectorstore")
+@traceable(name="build_vectorstore", tags=["indexing", "vectorstore", "faiss"], metadata={"component": "indexer", "embedding_model": "BAAI/bge-small-en-v1.5"})
 def build_vectorstore(splits):
-    emb = OpenAIEmbeddings(model="text-embedding-3-small")
+    emb = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5", model_kwargs={'device': 'cpu'})
     return FAISS.from_documents(splits, emb)
 
 # ----------------- parent setup function (traced) -----------------
-@traceable(name="setup_pipeline", tags=["setup"])
+@traceable(name="setup_pipeline", tags=["setup", "pipeline"], metadata={"component": "orchestrator"})
 def setup_pipeline(pdf_path: str, chunk_size=1000, chunk_overlap=150):
     # ✅ These three steps are “clubbed” under this parent function
     docs = load_pdf(pdf_path)
@@ -46,10 +50,6 @@ def setup_pipeline(pdf_path: str, chunk_size=1000, chunk_overlap=150):
     return vs
 
 # ----------------- model, prompt, and run -----------------
-API_KEY = os.getenv("GOOGLE_API_KEY")
-if not API_KEY:
-    raise ValueError("GOOGLE_API_KEY is not set")
-
 llm = ChatGoogleGenerativeAI(api_key=API_KEY, model="gemini-2.5-flash", temperature=0.7)
 
 prompt = ChatPromptTemplate.from_messages([

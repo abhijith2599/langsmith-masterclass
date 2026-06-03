@@ -9,6 +9,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+os.environ["LANGCHAIN_PROJECT"]="ReAct Agent"
+
 search_tool = DuckDuckGoSearchRun()
 
 @tool
@@ -32,6 +34,7 @@ llm = ChatGoogleGenerativeAI(api_key=API_KEY, model="gemini-2.5-flash", temperat
 prompt = hub.pull("hwchase17/react")  # pulls the standard ReAct agent prompt
 
 # Step 3: Create the ReAct agent manually with the pulled prompt
+# The brain LLM + Prompt
 agent = create_react_agent(
     llm=llm,
     tools=[search_tool, get_weather_data],
@@ -39,11 +42,12 @@ agent = create_react_agent(
 )
 
 # Step 4: Wrap it with AgentExecutor
+# This is the Runner
 agent_executor = AgentExecutor(
     agent=agent,
     tools=[search_tool, get_weather_data],
     verbose=True,
-    max_iterations=5
+    max_iterations=10
 )
 
 # What is the release date of Dhadak 2?
@@ -51,7 +55,7 @@ agent_executor = AgentExecutor(
 # Identify the birthplace city of Kalpana Chawla (search) and give its current temperature.
 
 # Step 5: Invoke
-response = agent_executor.invoke({"input": "What is the current temp of gurgaon"})
+response = agent_executor.invoke({"input": "Identify the birthplace city of Kalpana Chawla (search) and give its current temperature."})
 print(response)
 
 print(response['output'])

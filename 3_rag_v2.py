@@ -1,27 +1,28 @@
-# pip install -U langchain langchain-openai langchain-community faiss-cpu pypdf python-dotenv langsmith
-
 import os
 from dotenv import load_dotenv
 
 from langsmith import traceable  # <-- key import
+# Is used so that we can add the traces to langsmith. By default langsmith only support tracing of chains. So to add tracing for the RAG steps (or any other functions we want), we use the @traceable decorator, with a name. So that whatever that function is doing will be also visible in langsmith trace.
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableParallel, RunnablePassthrough, RunnableLambda
 from langchain_core.output_parsers import StrOutputParser
 
-# --- LangSmith env (make sure these are set) ---
-# LANGCHAIN_TRACING_V2=true
-# LANGCHAIN_API_KEY=...
-# LANGCHAIN_PROJECT=pdf_rag_demo
 
 load_dotenv()
 
-PDF_PATH = "islr.pdf"  # change to your file
+os.environ["LANGCHAIN_PROJECT"]="RAG Chatbot"
+
+API_KEY = os.getenv("GOOGLE_API_KEY")
+if not API_KEY:
+    raise ValueError("GOOGLE_API_KEY is not set")
+
+PDF_PATH = "islr.pdf"
 
 # ---------- traced setup steps ----------
 @traceable(name="load_pdf")
@@ -38,7 +39,7 @@ def split_documents(docs, chunk_size=1000, chunk_overlap=150):
 
 @traceable(name="build_vectorstore")
 def build_vectorstore(splits):
-    emb = OpenAIEmbeddings(model="text-embedding-3-small")
+    emb = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5", model_kwargs={'device': 'cpu'})
     # FAISS.from_documents internally calls the embedding model:
     vs = FAISS.from_documents(splits, emb)
     return vs
@@ -52,10 +53,6 @@ def setup_pipeline(pdf_path: str):
     return vs
 
 # ---------- pipeline ----------
-API_KEY = os.getenv("GOOGLE_API_KEY")
-if not API_KEY:
-    raise ValueError("GOOGLE_API_KEY is not set")
-
 llm = ChatGoogleGenerativeAI(api_key=API_KEY, model="gemini-2.5-flash", temperature=0.7)
 
 prompt = ChatPromptTemplate.from_messages([
